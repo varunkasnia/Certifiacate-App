@@ -63,9 +63,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 # Change these in main.py:
-app.include_router(quiz.router, prefix="/api/quiz", tags=["Quiz"])
-app.include_router(game.router, prefix="/api/game", tags=["Game"])
-app.include_router(export.router, prefix="/api/export", tags=["Export"])
+# Remove the prefixes here because they are already inside the router files
+app.include_router(quiz.router) 
+app.include_router(game.router)
+app.include_router(export.router)
 
 @app.get("/health")
 async def health_check():
