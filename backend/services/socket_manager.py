@@ -1,4 +1,5 @@
 import socketio
+import asyncio
 from typing import Dict, List
 from database import get_db, GameSession, Player, Question, Answer
 from sqlalchemy.orm import Session
@@ -16,6 +17,34 @@ sio = socketio.AsyncServer(
 
 # In-memory store for active game rooms
 active_games: Dict[str, dict] = {}
+pending_player_disconnects: Dict[str, asyncio.Task] = {}
+PLAYER_DISCONNECT_GRACE_SECONDS = 8
+
+
+async def _remove_player_after_grace(pin: str, sid: str):
+    """Remove player only if they did not reconnect quickly."""
+    try:
+        await asyncio.sleep(PLAYER_DISCONNECT_GRACE_SECONDS)
+        game_data = active_games.get(pin)
+        if not game_data:
+            return
+        if sid not in game_data.get('players', {}):
+            return
+
+        player_name = game_data['players'][sid]['name']
+        del game_data['players'][sid]
+        await sio.emit('player_left', {'player_name': player_name}, room=pin)
+
+        players_list = [
+            {'name': p['name'], 'player_id': p['player_id']}
+            for p in game_data['players'].values()
+        ]
+        await sio.emit('lobby_updated', {
+            'players': players_list,
+            'count': len(players_list)
+        }, room=pin)
+    finally:
+        pending_player_disconnects.pop(sid, None)
 
 
 @sio.event
@@ -37,18 +66,10 @@ async def disconnect(sid):
             await sio.emit('host_disconnected', {'message': 'Host disconnected'}, room=pin)
 
         if sid in game_data.get('players', {}):
-            player_name = game_data['players'][sid]['name']
-            del game_data['players'][sid]
-            await sio.emit('player_left', {'player_name': player_name}, room=pin)
-
-            players_list = [
-                {'name': p['name'], 'player_id': p['player_id']}
-                for p in game_data['players'].values()
-            ]
-            await sio.emit('lobby_updated', {
-                'players': players_list,
-                'count': len(players_list)
-            }, room=pin)
+            previous_task = pending_player_disconnects.pop(sid, None)
+            if previous_task:
+                previous_task.cancel()
+            pending_player_disconnects[sid] = asyncio.create_task(_remove_player_after_grace(pin, sid))
 
 
 @sio.event
@@ -61,6 +82,10 @@ async def join_lobby(sid, data):
     if not pin or not player_name:
         await sio.emit('error', {'message': 'Invalid data'}, room=sid)
         return
+
+    reconnect_task = pending_player_disconnects.pop(sid, None)
+    if reconnect_task:
+        reconnect_task.cancel()
     
     # Join the room
     await sio.enter_room(sid, pin)
@@ -85,6 +110,9 @@ async def join_lobby(sid, data):
         )
     ]
     for stale_sid in stale_sids:
+        stale_task = pending_player_disconnects.pop(stale_sid, None)
+        if stale_task:
+            stale_task.cancel()
         del active_games[pin]['players'][stale_sid]
     
     # Add player to game
