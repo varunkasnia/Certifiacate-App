@@ -62,10 +62,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-app.include_router(quiz.router, prefix="/api/v1/quiz", tags=["Quiz"])
-app.include_router(game.router, prefix="/api/v1/game", tags=["Game"])
-app.include_router(export.router, prefix="/api/v1/export", tags=["Export"])
+# Change these in main.py:
+app.include_router(quiz.router, prefix="/api/quiz", tags=["Quiz"])
+app.include_router(game.router, prefix="/api/game", tags=["Game"])
+app.include_router(export.router, prefix="/api/export", tags=["Export"])
 
 @app.get("/health")
 async def health_check():
