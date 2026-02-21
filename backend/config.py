@@ -1,6 +1,8 @@
 from pydantic_settings import BaseSettings
+from pydantic import field_validator
 from functools import lru_cache
 from typing import List, Optional
+import json
 
 class Settings(BaseSettings):
     # Application
@@ -18,9 +20,31 @@ class Settings(BaseSettings):
     # CORS
     CORS_ORIGINS: List[str] = [
         "http://localhost:3000",
-        "https://yourdomain.vercel.app",
+        "https://certifiacate-app-frontend-36he.vercel.app",
         "*" 
     ]
+
+    @field_validator("CORS_ORIGINS", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, value):
+        if isinstance(value, list):
+            return value
+        if not isinstance(value, str):
+            return value
+
+        raw = value.strip()
+        if not raw:
+            return []
+
+        if raw.startswith("["):
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    return [str(item).strip() for item in parsed if str(item).strip()]
+            except Exception:
+                pass
+
+        return [origin.strip() for origin in raw.split(",") if origin.strip()]
     
     # File Upload
     MAX_FILE_SIZE: int = 10 * 1024 * 1024  # 10MB
