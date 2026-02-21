@@ -4,59 +4,57 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import socketio
-import json  # Added for debug printing
+import json
+import logging
 
 from config import settings
 from database import init_db
 from routes import quiz, game, export
 from services.socket_manager import sio
 
+# Setup logging - essential for GenAI monitoring
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup and shutdown events"""
-    # Startup
-    print("Initializing database...")
-    init_db()
-    print("Database initialized!")
+    # Startup: Handle DB and perhaps pre-load AI models/cache
+    logger.info("🚀 Initializing application resources...")
+    try:
+        init_db() 
+    except Exception as e:
+        logger.error(f"❌ Database failed to initialize: {e}")
+    
     yield
-    # Shutdown
-    print("Shutting down...")
+    # Shutdown: Clean up connections
+    logger.info("🛑 Shutting down...")
 
-
-# Create FastAPI app
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
     lifespan=lifespan
 )
 
-# --- DEBUG HANDLER START ---
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    """
-    Overrides the default 422 error to print exactly what went wrong
-    to the console.
-    """
-    # Get the raw body to see what the frontend actually sent
-    try:
-        body = await request.body()
-        body_str = body.decode()
-    except Exception:
-        body_str = "<could not read body>"
-        
-    print(f"\n❌ VALIDATION ERROR at {request.url}")
-    print(f"📥 Received Body: {body_str}")
-    print(f"⚠️  Errors: {json.dumps(exc.errors(), indent=2)}\n")
+    # Log the error internally regardless
+    logger.error(f"Validation error at {request.url}: {exc.errors()}")
     
+    content = {"detail": exc.errors()}
+    
+    # Only expose raw body in development mode
+    if settings.DEBUG:
+        try:
+            body = await request.body()
+            content["body"] = body.decode()
+        except:
+            content["body"] = "<unread>"
+
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content={"detail": exc.errors(), "body": body_str},
+        content=content,
     )
-# --- DEBUG HANDLER END ---
 
-
-# CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
@@ -65,46 +63,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include routers
-app.include_router(quiz.router)
-app.include_router(game.router)
-app.include_router(export.router)
-
-
-@app.get("/")
-async def root():
-    """Health check endpoint"""
-    return {
-        "app": settings.APP_NAME,
-        "version": settings.APP_VERSION,
-        "status": "running"
-    }
-
+app.include_router(quiz.router, prefix="/api/v1/quiz", tags=["Quiz"])
+app.include_router(game.router, prefix="/api/v1/game", tags=["Game"])
+app.include_router(export.router, prefix="/api/v1/export", tags=["Export"])
 
 @app.get("/health")
 async def health_check():
-    """Detailed health check"""
     return {
         "status": "healthy",
-        "database": "connected",
-        "websocket": "active"
+        "version": settings.APP_VERSION,
+        "environment": settings.ENV # Helpful for deployment debugging
     }
 
-
-# Create Socket.IO ASGI app
 socket_app = socketio.ASGIApp(
     sio,
     other_asgi_app=app,
     socketio_path="socket.io"
 )
 
-
-# For local development
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
         "main:socket_app",
         host="0.0.0.0",
         port=8000,
-        reload=True
+        reload=settings.DEBUG, # Use setting instead of hardcoded True
+        workers=1 # Socket.IO usually requires 1 worker unless using a sticky-session sticky-load-balancer/Redis
     )
